@@ -4,12 +4,6 @@
 
 The `hiro-workload-donor` project is designed to mark Kubernetes pods as donors, allowing a stealer cluster to identify and steal these pods. This project includes a mutating admission webhook that modifies pod specifications to indicate they are eligible for workload stealing.
 
-# hiro-workload-donor
-
-## Overview
-
-The `hiro-workload-donor` project is designed to mark Kubernetes pods as donors, allowing a stealer cluster to identify and steal these pods. This project includes a mutating admission webhook that modifies pod specifications to indicate they are eligible for workload stealing.
-
 ## Installation Steps
 
 1. **Clone the repository**:
