@@ -19,6 +19,7 @@ The `hiro-workload-donor` project is designed to mark Kubernetes pods as donors,
     ./start_donor.sh
     ```
 
+**Test by deploying a pod**:
 Once the above component is installed, test it by running `scripts/test_pod_steal.sh`
 ```sh
 cd script
