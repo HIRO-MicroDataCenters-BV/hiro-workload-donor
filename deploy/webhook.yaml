@@ -23,5 +23,5 @@ webhooks:
         path: "/mutate"
       caBundle: <ENCODED_CA>
     sideEffects: None
-    timeoutSeconds: 5
+    timeoutSeconds: 10
 

@@ -9,7 +9,9 @@ import (
 
 	"workloadstealagent/pkg/controller"
 	"workloadstealagent/pkg/validate"
+	"workloadstealagent/pkg/worker"
 
+	"github.com/google/uuid"
 	"github.com/spf13/viper"
 )
 
@@ -21,32 +23,18 @@ var (
 func main() {
 	stopChan := make(chan bool)
 
-	// slog.Info("Configuring Informer")
-	// natsConfig := informer.NATSConfig{
-	// 	NATSURL:     getENVValue("NATS_URL"),
-	// 	NATSSubject: getENVValue("NATS_SUBJECT"),
-	// }
-	// informerConfig := informer.Config{
-	// 	Nconfig:          natsConfig,
-	// 	IgnoreNamespaces: strings.Split(getENVValue("IGNORE_NAMESPACES"), ","),
-	// }
-	// informer, err := informer.New(informerConfig)
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-
-	// //go log.Fatal(informer.Start(stopChan))
-	// go func() {
-	// 	informer.Start(stopChan)
-	// }()
+	// To Do: Every resrat of the donor will have a new UUID.
+	// This logic has to be changed so that the UUID is persisted.
+	donorUUID := uuid.New().String()
 
 	slog.Info("Configuring Validator")
 	natsConfig := validate.NATSConfig{
 		NATSURL:     getENVValue("NATS_URL"),
-		NATSSubject: getENVValue("NATS_SUBJECT"),
+		NATSSubject: getENVValue("NATS_WORKLOAD_SUBJECT"),
 	}
 	validatorConfig := validate.Config{
 		Nconfig:          natsConfig,
+		DonorUUID:        donorUUID,
 		IgnoreNamespaces: strings.Split(getENVValue("IGNORE_NAMESPACES"), ","),
 		LableToFilter:    getENVValue("NO_WORK_LOAD_STEAL_LABLE"),
 	}
@@ -64,6 +52,19 @@ func main() {
 	}
 	server := controller.New(controllerConfig, validator)
 
+	slog.Info("Configuring Worker")
+	workerNATSConfig := worker.NATSConfig{
+		NATSURL:     getENVValue("NATS_URL"),
+		NATSSubject: getENVValue("NATS_RETURN_WORKLOAD_SUBJECT"),
+	}
+	workerConfig := worker.Config{
+		Nconfig:   workerNATSConfig,
+		DonorUUID: donorUUID,
+	}
+	consumer, err := worker.New(workerConfig)
+	if err != nil {
+		log.Fatal(err)
+	}
 	//go log.Fatal(server.Start(stopChan))
 	go func() {
 		server.StartMutate(stopChan)
@@ -71,6 +72,10 @@ func main() {
 
 	go func() {
 		server.StartValidate(stopChan)
+	}()
+
+	go func() {
+		consumer.Start(stopChan)
 	}()
 
 	<-stopChan

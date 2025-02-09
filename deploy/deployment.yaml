@@ -12,7 +12,7 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: ["pods"]
-  verbs: ["get", "list", "watch", "update"]
+  verbs: ["get", "list", "watch", "update", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -52,8 +52,10 @@ spec:
           env:
           - name: NATS_URL
             value: "demo.nats.io:4222"  
-          - name: NATS_SUBJECT
+          - name: NATS_WORKLOAD_SUBJECT
             value: "WorkStealingPod"
+          - name: NATS_RETURN_WORKLOAD_SUBJECT
+            value: "ReturnWorkStealingPod"
           - name: NO_WORK_LOAD_STEAL_LABLE
             value: "NoWorkLoadSteal"
           - name: IGNORE_NAMESPACES

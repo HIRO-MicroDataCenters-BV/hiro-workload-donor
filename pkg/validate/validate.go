@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/mattbaird/jsonpatch"
 	"github.com/nats-io/nats.go"
 	admission "k8s.io/api/admission/v1"
@@ -23,9 +25,19 @@ var (
 	runtimeScheme = runtime.NewScheme()
 	codecFactory  = serializer.NewCodecFactory(runtimeScheme)
 	deserializer  = codecFactory.UniversalDeserializer()
-	K8SNamespaces = []string{"default", "kube-system", "kube-public",
+	k8SNamespaces = []string{"default", "kube-system", "kube-public",
 		"kube-node-lease", "kube-admission", "kube-proxy", "kube-controller-manager",
 		"kube-scheduler", "kube-dns"}
+	jetStreamBucket          = "message_tracking"
+	waitTimeForACK           = 5
+	nodeSelectorUUID         = uuid.New().String()
+	mutatePodNodeSelectorMap = map[string]string{
+		"node-stolen": "true",
+		"node-id":     nodeSelectorUUID,
+	}
+	mutatePodLablesMap = map[string]string{
+		"is-pod-stolen": "true",
+	}
 )
 
 type NATSConfig struct {
@@ -35,6 +47,7 @@ type NATSConfig struct {
 
 type Config struct {
 	Nconfig          NATSConfig
+	DonorUUID        string
 	LableToFilter    string
 	IgnoreNamespaces []string
 }
@@ -47,6 +60,12 @@ type Validator interface {
 type validator struct {
 	vconfig Config
 	cli     *kubernetes.Clientset
+}
+
+// Create a struct with donorUUID and pod object
+type DonorPod struct {
+	DonorUUID string      `json:"donorUUID"`
+	Pod       *corev1.Pod `json:"pod"`
 }
 
 func getClientSet() (*kubernetes.Clientset, error) {
@@ -111,10 +130,14 @@ func (v *validator) Mutate(ar admission.AdmissionReview) *admission.AdmissionRes
 		return nil
 	}
 
+	//go func() {}()
 	// Make the pod to be stolen
-	go func() {
-		Inform(&pod, v.vconfig.Nconfig.NATSSubject, v.vconfig.Nconfig.NATSURL)
-	}()
+	stolerUUID, err := Inform(&pod, v.vconfig)
+	if err != nil && stolerUUID == "" {
+		slog.Error("Failed to make the pod to be stolen", "name", pod.Name, "namespace", pod.Namespace, "error", err)
+		return &admission.AdmissionResponse{Allowed: true}
+	}
+	slog.Info("Pod is stolen", "name", pod.Name, "namespace", pod.Namespace, "stealerUUID", stolerUUID)
 
 	//Mutate pod so that it won't be scheduled
 	return mutatePod(&pod)
@@ -128,35 +151,105 @@ func isLableExists(pod *corev1.Pod, lable string) bool {
 	return true
 }
 
-func Inform(pod *corev1.Pod, nsubject string, nurl string) error {
+func Inform(pod *corev1.Pod, vconfig Config) (string, error) {
 	// Connect to NATS server
-	natsConnect, err := nats.Connect(nurl)
+	natsConnect, err := nats.Connect(vconfig.Nconfig.NATSURL)
 	if err != nil {
 		slog.Error("Failed to connect to NATS server: ", "error", err)
-		return err
+		return "", err
 	}
 	defer natsConnect.Close()
 	slog.Info("Connected to NATS server")
 
-	// Serialize the entire Pod metadata to JSON
-	metadataJSON, err := json.Marshal(pod)
+	// Connect to JetStreams
+	js, err := natsConnect.JetStream()
 	if err != nil {
-		slog.Error("Failed to serialize Pod metadata", "error", err)
-		return err
+		slog.Error("Failed to connect to JetStreams server: ", "error", err)
+		return "", err
+	}
+	slog.Info("Connected to JetStream")
+
+	// Create a stream for message processing
+	_, err = js.AddStream(&nats.StreamConfig{
+		Name:      "Stream" + vconfig.Nconfig.NATSSubject,
+		Subjects:  []string{vconfig.Nconfig.NATSSubject},
+		Storage:   nats.FileStorage,
+		Replicas:  1,
+		Retention: nats.WorkQueuePolicy, // Ensures a message is only processed once
+	})
+	if err != nil && err != nats.ErrStreamNameAlreadyInUse {
+		slog.Error("Failed to add a streams to JetStream server: ", "error", err)
 	}
 
-	// Publish notification to NATS
-	err = natsConnect.Publish(nsubject, metadataJSON)
-	if err != nil {
-		slog.Error("Failed to publish message to NATS", "error", err, "subject", nsubject)
-		return err
+	// Create or get the KV Store for message tracking
+	kv, err := js.KeyValue(jetStreamBucket)
+	if err != nil && err != nats.ErrBucketNotFound {
+		slog.Error("Failed to get KeyVlaue: ", "error", err)
+		return "", err
 	}
-	slog.Info("Published Pod metadata to NATS", "subject", nsubject, "metadata", string(metadataJSON))
-	return nil
+	if kv == nil {
+		kv, _ = js.CreateKeyValue(&nats.KeyValueConfig{Bucket: jetStreamBucket})
+		slog.Info("Created a new KeyValue bucket", "bucket", jetStreamBucket)
+	}
+
+	// Store "Pending" in KV Store
+	_, err = kv.Put(vconfig.DonorUUID, []byte("Pending"))
+	if err != nil {
+		slog.Error("Failed to put value in KV bucket: ", "error", err)
+	}
+
+	donorPod := DonorPod{
+		DonorUUID: vconfig.DonorUUID,
+		Pod:       pod,
+	}
+	slog.Info("Created donorPod structure", "struct", donorPod)
+
+	// Serialize the entire Pod metadata to JSON
+	metadataJSON, err := json.Marshal(donorPod)
+	if err != nil {
+		slog.Error("Failed to serialize donorPod", "error", err, "donorPod", donorPod)
+		return "", err
+	}
+
+	// // Check if the stream exists
+	// streamInfo, err := js.StreamInfo(nsubject)
+	// if err != nil {
+	// 	slog.Error("Failed to get stream info", "error", err)
+	// 	return "", err
+	// }
+	// slog.Info("Stream info", "info", streamInfo)
+
+	// Publish notification to JetStreams
+	_, err = js.Publish(vconfig.Nconfig.NATSSubject, metadataJSON)
+	if err != nil {
+		slog.Error("Failed to publish message to NATS", "error", err, "subject", vconfig.Nconfig.NATSSubject, "donorUUID", vconfig.DonorUUID)
+		return "", err
+	}
+
+	// err = natsConnect.Publish(nsubject, metadataJSON)
+	// if err != nil {
+	// 	slog.Error("Failed to publish message to NATS", "error", err, "subject", nsubject, "donorUUID", donorUUID)
+	// 	return "", err
+	// }
+
+	slog.Info("Published Pod metadata to NATS", "subject", vconfig.Nconfig.NATSSubject, "metadata", string(metadataJSON), "donorUUID", vconfig.DonorUUID)
+
+	slog.Info(fmt.Sprintf("Waiting for %d seconds for ACK", waitTimeForACK))
+	for i := 0; i < waitTimeForACK; i++ {
+		time.Sleep(1 * time.Second) // Wait for 1 second
+		entry, err := kv.Get(vconfig.DonorUUID)
+		if err == nil && string(entry.Value()) != "Pending" {
+			stealerUUID := string(entry.Value())
+			slog.Info("Published Pod metadata was processed", "donorUUID", vconfig.DonorUUID, "stealerUUID", stealerUUID)
+			return stealerUUID, nil
+		}
+	}
+	slog.Error("No Stealer is ready to stole within the wait time", "donorUUID", vconfig.DonorUUID, "WaitTimeForACK", waitTimeForACK)
+	return "", fmt.Errorf("no Stealer is ready to stole within the wait time for donorUUID: %s", vconfig.DonorUUID)
 }
 
 func contains(list []string, item string) bool {
-	for _, str := range mergeUnique(list, K8SNamespaces) {
+	for _, str := range mergeUnique(list, k8SNamespaces) {
 		if str == item {
 			return true
 		}
@@ -196,11 +289,14 @@ func mutatePod(pod *corev1.Pod) *admission.AdmissionResponse {
 	// 		"echo 'Pod got stolen' && sleep infinity",
 	// 	}
 	// }
-	modifiedPod.Spec.NodeSelector = map[string]string{
-		"node-stolen": "true",
-		"node-id":     "7388q9y8989qwyehadsbdf",
+
+	modifiedPod.Spec.NodeSelector = mutatePodNodeSelectorMap
+	if modifiedPod.Labels == nil {
+		modifiedPod.Labels = make(map[string]string)
 	}
-	modifiedPod.Labels["pod-stolen"] = "true"
+	for key, value := range mutatePodLablesMap {
+		modifiedPod.Labels[key] = value
+	}
 
 	// Marshal the modified pod to JSON
 	originalJSON, err := json.Marshal(originalPod)

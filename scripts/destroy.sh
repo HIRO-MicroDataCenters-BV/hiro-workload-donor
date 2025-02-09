@@ -1,4 +1,5 @@
 #!/bin/bash
-echo "Delete and Create a 'kind' cluster with name 'local'"
-kind delete cluster --name remote
-kind create cluster --name remote
+
+CLUSTER_NAME=${1:-remote}
+echo "Delete and Create a 'kind' cluster with name '$CLUSTER_NAME'"
+kind delete cluster --name $CLUSTER_NAME

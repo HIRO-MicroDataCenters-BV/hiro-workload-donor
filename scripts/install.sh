@@ -1,13 +1,14 @@
 #!/bin/bash
 
+CLUSTER_NAME=${1:-remote}
 echo "Build Docker image"
 docker build -t workloadstealagent:alpha1 .
 
-echo "Set the kubectl context to remote cluster"
-kubectl cluster-info --context kind-remote
+echo "Set the kubectl context to $CLUSTER_NAME cluster"
+kubectl cluster-info --context kind-$CLUSTER_NAME
 
-echo "Load Image to Kind cluster named 'remote'"
-kind load docker-image --name remote workloadstealagent:alpha1
+echo "Load Image to Kind cluster named '$CLUSTER_NAME'"
+kind load docker-image --name $CLUSTER_NAME workloadstealagent:alpha1
 
 echo "Create 'hiro' namespace if it doesn't exist"
 kubectl get namespace | grep -q "hiro" || kubectl create namespace hiro
