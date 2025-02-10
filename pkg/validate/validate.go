@@ -137,10 +137,10 @@ func (v *validator) Mutate(ar admission.AdmissionReview) *admission.AdmissionRes
 		slog.Error("Failed to make the pod to be stolen", "name", pod.Name, "namespace", pod.Namespace, "error", err)
 		return &admission.AdmissionResponse{Allowed: true}
 	}
-	slog.Info("Pod is stolen", "name", pod.Name, "namespace", pod.Namespace, "stealerUUID", stolerUUID)
+	slog.Info("Pod got stolen", "name", pod.Name, "namespace", pod.Namespace, "stealerUUID", stolerUUID)
 
 	//Mutate pod so that it won't be scheduled
-	return mutatePod(&pod)
+	return mutatePod(&pod, v.vconfig.DonorUUID, stolerUUID)
 }
 
 func isLableExists(pod *corev1.Pod, lable string) bool {
@@ -275,7 +275,7 @@ func mergeUnique(slice1, slice2 []string) []string {
 	return result
 }
 
-func mutatePod(pod *corev1.Pod) *admission.AdmissionResponse {
+func mutatePod(pod *corev1.Pod, donorUUID string, stealerUUID string) *admission.AdmissionResponse {
 	originalPod := pod.DeepCopy()
 	modifiedPod := originalPod.DeepCopy()
 
@@ -297,6 +297,8 @@ func mutatePod(pod *corev1.Pod) *admission.AdmissionResponse {
 	for key, value := range mutatePodLablesMap {
 		modifiedPod.Labels[key] = value
 	}
+	modifiedPod.Labels["donorUUID"] = donorUUID
+	modifiedPod.Labels["stealerUUID"] = stealerUUID
 
 	// Marshal the modified pod to JSON
 	originalJSON, err := json.Marshal(originalPod)

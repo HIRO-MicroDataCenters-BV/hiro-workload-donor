@@ -100,7 +100,7 @@ func (n *consume) Start(stopChan chan<- bool) error {
 		pod = *podResults.Pod
 		slog.Info("Deserialized Pod", "pod", pod)
 		if pod.Labels["donorUUID"] != n.config.DonorUUID {
-			slog.Error("Pod is not intended for this donot", "podName", pod.Name, "podNamespace", pod.Namespace)
+			slog.Error("Pod is not intended for this donor", "podName", pod.Name, "podNamespace", pod.Namespace)
 			return
 
 		}
@@ -114,13 +114,19 @@ func (n *consume) Start(stopChan chan<- bool) error {
 				"podName", pod.Name, "podNamespace", pod.Namespace)
 			msg.Ack()
 			return
+		} else if pod.Labels["stealerUUID"] != currentPod.Labels["stealerUUID"] ||
+			pod.Labels["donorUUID"] != currentPod.Labels["donorUUID"] {
+			slog.Error("Stolen Pod Lables are not matching with the current Pod", "podName", pod.Name,
+				"podNamespace", pod.Namespace, "currentPodLables", currentPod.Labels, "stolenPodLables", pod.Labels)
+			return
 		} else if err != nil {
 			slog.Error("Error retrieving Pod", "podName", pod.Name, "podNamespace", pod.Namespace, "error", err)
 			return
 		}
 
 		if currentPod.Status.Phase != corev1.PodPending {
-			slog.Error("Pod is not in Pending state", "podName", pod.Name, "podNamespace", pod.Namespace, "phase", currentPod.Status.Phase)
+			slog.Error("Pod is not in Pending state", "podName", pod.Name, "podNamespace", pod.Namespace,
+				"phase", currentPod.Status.Phase)
 			return
 		}
 

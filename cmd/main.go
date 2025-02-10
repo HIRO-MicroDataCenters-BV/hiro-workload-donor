@@ -26,6 +26,7 @@ func main() {
 	// To Do: Every resrat of the donor will have a new UUID.
 	// This logic has to be changed so that the UUID is persisted.
 	donorUUID := uuid.New().String()
+	// donorUUID := "b458a190-4744-46f4-b16b-2739cf9fccb8"
 
 	slog.Info("Configuring Validator")
 	natsConfig := validate.NATSConfig{

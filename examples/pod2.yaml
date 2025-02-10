@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: hiroworksteal1
+  name: hiroworksteal2
   labels:
     environment: dev
 ---
@@ -9,7 +9,7 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: nginx-pod
-  namespace: hiroworksteal1
+  namespace: hiroworksteal2
   labels:
     app: nginx
 spec:
